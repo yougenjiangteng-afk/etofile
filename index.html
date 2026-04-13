@@ -341,14 +341,12 @@ function showView(id){
   const t=$(id); t.style.display='flex'; t.classList.add('active');
 }
 
-// routing
 function route(){
   const m=location.pathname.match(/^\/share\/([a-f0-9-]{36})$/);
   if(m){ showView('view-download'); loadDL(m[1]); }
   else showView('view-upload');
 }
 
-// expire chips
 document.querySelectorAll('.chip').forEach(c=>{
   c.addEventListener('click',()=>{
     document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
@@ -356,7 +354,6 @@ document.querySelectorAll('.chip').forEach(c=>{
   });
 });
 
-// file picking
 let files=[];
 const dz=$('dropZone');
 $('pickBtn').addEventListener('click',()=>$('fileInput').click());
@@ -371,116 +368,64 @@ function renderFiles(){
   const list=$('fileList'); list.innerHTML='';
   files.forEach((f,i)=>{
     const d=document.createElement('div'); d.className='file-item';
-    d.innerHTML=`<div class="file-icon">${ico(f.name)}</div><div class="file-info"><div class="file-name">${esc(f.name)}</div><div class="file-size">${fmt(f.size)}</div></div><button class="file-remove" data-i="${i}">✕</button>`;
+    d.innerHTML='<div class="file-icon">'+ico(f.name)+'</div><div class="file-info"><div class="file-name">'+esc(f.name)+'</div><div class="file-size">'+fmt(f.size)+'</div></div><button class="file-remove" data-i="'+i+'">✕</button>';
     list.appendChild(d);
   });
   list.querySelectorAll('.file-remove').forEach(b=>b.addEventListener('click',()=>{ files.splice(+b.dataset.i,1); renderFiles(); }));
   list.style.display=$('optionsBar').style.display=files.length?'flex':'none';
 }
 
-// ── チャンク並列アップロード ─────────────────────────────────────────────
-const CHUNK_SIZE  = 8 * 1024 * 1024;  // 8MB/チャンク
-const CONCURRENCY = 4;                 // 同時送信数
-
 $('uploadBtn').addEventListener('click', doUpload);
 
-async function doUpload() {
-  if (!files.length) return;
-  $('uploadBtn').disabled = true;
-  const pw = $('progressWrap'); pw.style.display = 'flex';
-  $('progressFill').style.width = '0%'; $('progressPct').textContent = '0%';
-  $('progressStatus').textContent = 'アップロード中...';
-  $('statSpeed').textContent = '— MB/s'; $('statEta').textContent = '計算中...';
-  const totalBytes = files.reduce((s, f) => s + f.size, 0);
-  $('statLoaded').textContent = '0 B / ' + fmt(totalBytes);
+function doUpload(){
+  if(!files.length) return;
+  $('uploadBtn').disabled=true;
+  const pw=$('progressWrap'); pw.style.display='flex';
+  $('progressFill').style.width='0%'; $('progressPct').textContent='0%';
+  $('progressStatus').textContent='アップロード中...';
+  $('statSpeed').textContent='— MB/s'; $('statEta').textContent='計算中...';
+  const tot=files.reduce((s,f)=>s+f.size,0);
+  $('statLoaded').textContent='0 B / '+fmt(tot);
 
-  const fpl = $('fpl'); fpl.innerHTML = '';
-  files.forEach(f => {
-    const d = document.createElement('div'); d.className = 'fpl-item';
-    d.innerHTML = '<span class="fpl-name">'+esc(f.name)+'</span><span class="fpl-size">'+fmt(f.size)+'</span><span class="fpl-badge up">送信中</span>';
+  const fpl=$('fpl'); fpl.innerHTML='';
+  files.forEach(f=>{
+    const d=document.createElement('div'); d.className='fpl-item';
+    d.innerHTML='<span class="fpl-name">'+esc(f.name)+'</span><span class="fpl-size">'+fmt(f.size)+'</span><span class="fpl-badge up">送信中</span>';
     fpl.appendChild(d);
   });
 
-  try {
-    // 1. セッション開始
-    const initRes = await fetch('/upload/init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expireHours: $('expireHours').value,
-        files: files.map(f => ({ name: encodeURIComponent(f.name), size: f.size }))
-      })
-    });
-    const { uploadId } = await initRes.json();
+  const fd=new FormData();
+  files.forEach(f=>fd.append('files',f));
+  fd.append('expireHours',$('expireHours').value);
 
-    // 2. チャンクキューを作成
-    const queue = [];
-    files.forEach(file => {
-      const chunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
-      for (let i = 0; i < chunks; i++) queue.push({ file, index: i, total: chunks });
-    });
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/upload');
 
-    let sentBytes = 0, lastBytes = 0, lastTime = Date.now();
+  let lastL=0, lastT=Date.now();
 
-    const updateProgress = (added) => {
-      sentBytes += added;
-      const now = Date.now(), dt = (now - lastTime) / 1000;
-      if (dt > 0.3) {
-        const spd = (sentBytes - lastBytes) / dt;
-        const eta = (totalBytes - sentBytes) / spd;
-        const pct = Math.min(99, Math.round(sentBytes / totalBytes * 100));
-        $('progressFill').style.width = pct + '%';
-        $('progressPct').textContent = pct + '%';
-        $('statSpeed').textContent = spd < (1<<20) ? (spd/1024).toFixed(0)+' KB/s' : (spd/(1<<20)).toFixed(1)+' MB/s';
-        $('statEta').textContent = !isFinite(eta)||eta>3600 ? '計算中...' : eta<60 ? '残り約'+Math.ceil(eta)+'秒' : '残り約'+Math.ceil(eta/60)+'分';
-        $('statLoaded').textContent = fmt(sentBytes)+' / '+fmt(totalBytes);
-        lastBytes = sentBytes; lastTime = now;
-      }
-    };
-
-    // 3. CONCURRENCY並列でチャンク送信
-    const sendChunk = async ({ file, index, total }) => {
-      const start = index * CHUNK_SIZE;
-      const blob  = file.slice(start, start + CHUNK_SIZE);
-      const fd    = new FormData();
-      fd.append('uploadId', uploadId);
-      fd.append('filename', encodeURIComponent(file.name));
-      fd.append('index',    String(index));
-      fd.append('total',    String(total));
-      fd.append('chunk',    blob, file.name);
-      const res = await fetch('/upload/chunk', { method: 'POST', body: fd });
-      if (!res.ok) throw new Error('チャンク送信失敗');
-      updateProgress(blob.size);
-    };
-
-    const worker = async () => { while (queue.length) { const t = queue.shift(); if (t) await sendChunk(t); } };
-    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-
-    // 4. 完了通知（リトライあり）
-    $('progressStatus').textContent = 'サーバーで処理中...';
-    $('progressFill').style.width = '99%';
-    let result;
-    for (let i = 0; i < 10; i++) {
-      const r = await fetch('/upload/complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadId })
-      });
-      const data = await r.json();
-      if (r.status === 200) { result = data; break; }
-      await new Promise(r => setTimeout(r, 500));
+  xhr.upload.addEventListener('progress',e=>{
+    if(!e.lengthComputable) return;
+    const pct=Math.round(e.loaded/e.total*100);
+    $('progressFill').style.width=pct+'%';
+    $('progressPct').textContent=pct+'%';
+    const now=Date.now(), dt=(now-lastT)/1000;
+    if(dt>0.3){
+      const spd=(e.loaded-lastL)/dt;
+      const eta=(e.total-e.loaded)/spd;
+      $('statSpeed').textContent=spd<(1<<20)?(spd/1024).toFixed(0)+' KB/s':(spd/(1<<20)).toFixed(1)+' MB/s';
+      $('statEta').textContent=!isFinite(eta)||eta>3600?'計算中...':eta<60?'残り約'+Math.ceil(eta)+'秒':'残り約'+Math.ceil(eta/60)+'分';
+      $('statLoaded').textContent=fmt(e.loaded)+' / '+fmt(e.total);
+      lastL=e.loaded; lastT=now;
     }
-    if (!result) throw new Error('完了処理がタイムアウトしました');
+    if(pct===100){ $('progressStatus').textContent='サーバーで処理中...'; fpl.querySelectorAll('.fpl-badge').forEach(b=>{ b.className='fpl-badge done'; b.textContent='完了'; }); }
+  });
 
-    $('progressFill').style.width = '100%'; $('progressPct').textContent = '100%';
-    fpl.querySelectorAll('.fpl-badge').forEach(b => { b.className = 'fpl-badge done'; b.textContent = '完了'; });
-    showResult(result);
-
-  } catch (e) {
-    alert('アップロードエラー: ' + e.message);
-    $('uploadBtn').disabled = false;
-    pw.style.display = 'none';
-  }
+  xhr.addEventListener('load',()=>{
+    if(xhr.status===200){ showResult(JSON.parse(xhr.responseText)); }
+    else{ let msg='アップロード失敗'; try{ const e=JSON.parse(xhr.responseText); if(e.error) msg=e.error; }catch(_){} alert(msg); $('uploadBtn').disabled=false; pw.style.display='none'; }
+  });
+  xhr.addEventListener('error',()=>{ alert('ネットワークエラーが発生しました'); $('uploadBtn').disabled=false; $('progressWrap').style.display='none'; });
+  xhr.send(fd);
 }
 
 function showResult({shareId,expiresAt,expireHours}){
@@ -512,7 +457,7 @@ async function loadDL(id){
     const rem=Math.round((d.expiresAt-Date.now())/3600000);
     $('dlExpire').textContent='残り約'+rem+'時間で自動削除';
     const ul=$('dlList'); ul.innerHTML='';
-    d.files.forEach(f=>{ const li=document.createElement('li'); li.innerHTML=`<div class="dl-file-info"><span class="dl-file-name">${esc(f.name)}</span><span class="dl-file-size">${fmt(f.size)}</span></div><button class="btn-dl" data-n="${encodeURIComponent(f.name)}">ダウンロード</button>`; ul.appendChild(li); });
+    d.files.forEach(f=>{ const li=document.createElement('li'); li.innerHTML='<div class="dl-file-info"><span class="dl-file-name">'+esc(f.name)+'</span><span class="dl-file-size">'+fmt(f.size)+'</span></div><button class="btn-dl" data-n="'+encodeURIComponent(f.name)+'">ダウンロード</button>'; ul.appendChild(li); });
     ul.querySelectorAll('.btn-dl').forEach(b=>b.addEventListener('click',()=>{ location.href='/share/'+id+'/download/'+b.dataset.n; }));
     $('dlAllBtn').onclick=()=>{ location.href='/share/'+id+'/download-all'; };
   } catch(e){ $('dlTitle').textContent=e.message; $('dlExpire').textContent=''; $('dlAllBtn').style.display='none'; }
@@ -529,6 +474,7 @@ function genQR(url){
 }
 
 route();
+
 </script>
 </body>
 </html>
