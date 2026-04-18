@@ -173,7 +173,7 @@ body { font-family: var(--body); background: var(--bg); color: var(--ink); }
           <p class="drop-meta">または</p>
           <button class="btn-pick" id="pickBtn">ファイルを選択する</button>
           <input type="file" id="fileInput" multiple hidden/>
-          <p class="drop-hint">最大 50MB・10ファイルまで</p>
+          <p class="drop-hint">最大 1GB・10ファイルまで</p>
         </div>
       </div>
 
@@ -343,7 +343,7 @@ dz.addEventListener('drop',e=>{ e.preventDefault(); dz.classList.remove('over');
 
 function addFiles(inc){
   inc.forEach(f=>{
-    if(f.size > 50*1024*1024){ alert(f.name+' は50MBを超えています'); return; }
+    if(f.size > 1*1024*1024*1024){ alert(f.name+' は1GBを超えています'); return; }
     if(!files.find(x=>x.name===f.name&&x.size===f.size)) files.push(f);
   });
   renderFiles();
